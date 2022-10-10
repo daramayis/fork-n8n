@@ -47,79 +47,157 @@ afterAll(async () => {
 	await testDb.terminate(testDbName);
 });
 
-test('PUT /workflows/:id/share should save sharing with new users', async () => {
-	const owner = await testDb.createUser({ globalRole: globalOwnerRole });
-	const member = await testDb.createUser({ globalRole: globalMemberRole });
-	const workflow = await createWorkflow({}, owner);
+describe('PUT /workflows/:id', () => {
+	test('PUT /workflows/:id/share should save sharing with new users', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const member = await testDb.createUser({ globalRole: globalMemberRole });
+		const workflow = await createWorkflow({}, owner);
 
-	const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
 
-	const response = await authOwnerAgent
-		.put(`/workflows/${workflow.id}/share`)
-		.send({ shareWithIds: [member.id] });
+		const response = await authOwnerAgent
+			.put(`/workflows/${workflow.id}/share`)
+			.send({ shareWithIds: [member.id] });
 
-	expect(response.statusCode).toBe(200);
+		expect(response.statusCode).toBe(200);
 
-	const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
-	expect(sharedWorkflows.length).toBe(2);
+		const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
+		expect(sharedWorkflows.length).toBe(2);
+	});
+
+	test('PUT /workflows/:id/share should not fail when sharing with invalid user-id', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const workflow = await createWorkflow({}, owner);
+
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+
+		const response = await authOwnerAgent
+			.put(`/workflows/${workflow.id}/share`)
+			.send({ shareWithIds: [uuid()] });
+
+		expect(response.statusCode).toBe(200);
+
+		const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
+		expect(sharedWorkflows.length).toBe(1);
+	});
+
+	test('PUT /workflows/:id/share should allow sharing with multiple users', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const member = await testDb.createUser({ globalRole: globalMemberRole });
+		const anotherMember = await testDb.createUser({ globalRole: globalMemberRole });
+		const workflow = await createWorkflow({}, owner);
+
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+
+		const response = await authOwnerAgent
+			.put(`/workflows/${workflow.id}/share`)
+			.send({ shareWithIds: [member.id, anotherMember.id] });
+
+		expect(response.statusCode).toBe(200);
+
+		const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
+		expect(sharedWorkflows.length).toBe(3);
+	});
+
+	test('PUT /workflows/:id/share should override sharing', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const member = await testDb.createUser({ globalRole: globalMemberRole });
+		const anotherMember = await testDb.createUser({ globalRole: globalMemberRole });
+		const workflow = await createWorkflow({}, owner);
+
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+
+		const response = await authOwnerAgent
+			.put(`/workflows/${workflow.id}/share`)
+			.send({ shareWithIds: [member.id, anotherMember.id] });
+
+		expect(response.statusCode).toBe(200);
+
+		const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
+		expect(sharedWorkflows.length).toBe(3);
+
+		const secondResponse = await authOwnerAgent
+			.put(`/workflows/${workflow.id}/share`)
+			.send({ shareWithIds: [member.id] });
+		expect(secondResponse.statusCode).toBe(200);
+
+		const secondSharedWorkflows = await testDb.getWorkflowSharing(workflow);
+		expect(secondSharedWorkflows.length).toBe(2);
+	});
 });
 
-test('PUT /workflows/:id/share should not fail when sharing with invalid user-id', async () => {
-	const owner = await testDb.createUser({ globalRole: globalOwnerRole });
-	const workflow = await createWorkflow({}, owner);
+describe('GET /workflows/:id', () => {
+	test('GET should fail with invalid id', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
 
-	const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+		const response = await authOwnerAgent.get('/workflows/potatoes');
 
-	const response = await authOwnerAgent
-		.put(`/workflows/${workflow.id}/share`)
-		.send({ shareWithIds: [uuid()] });
+		expect(response.statusCode).toBe(400);
+	});
 
-	expect(response.statusCode).toBe(200);
+	test('GET should return a workflow with owner', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const workflow = await createWorkflow({}, owner);
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
 
-	const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
-	expect(sharedWorkflows.length).toBe(1);
-});
+		const response = await authOwnerAgent.get(`/workflows/${workflow.id}`);
 
-test('PUT /workflows/:id/share should allow sharing with multiple users', async () => {
-	const owner = await testDb.createUser({ globalRole: globalOwnerRole });
-	const member = await testDb.createUser({ globalRole: globalMemberRole });
-	const anotherMember = await testDb.createUser({ globalRole: globalMemberRole });
-	const workflow = await createWorkflow({}, owner);
+		expect(response.statusCode).toBe(200);
+		expect(response.body.data.ownedBy).toMatchObject({
+			id: owner.id,
+			email: owner.email,
+			firstName: owner.firstName,
+			lastName: owner.lastName,
+		});
 
-	const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+		expect(response.body.data.sharedWith).toHaveLength(0);
+	});
 
-	const response = await authOwnerAgent
-		.put(`/workflows/${workflow.id}/share`)
-		.send({ shareWithIds: [member.id, anotherMember.id] });
+	test('GET should return shared workflow with user data', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const member = await testDb.createUser({ globalRole: globalMemberRole });
+		const workflow = await createWorkflow({}, owner);
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+		await testDb.shareWorkflowWithUsers(workflow, [member]);
 
-	expect(response.statusCode).toBe(200);
+		const response = await authOwnerAgent.get(`/workflows/${workflow.id}`);
 
-	const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
-	expect(sharedWorkflows.length).toBe(3);
-});
+		expect(response.statusCode).toBe(200);
+		expect(response.body.data.ownedBy).toMatchObject({
+			id: owner.id,
+			email: owner.email,
+			firstName: owner.firstName,
+			lastName: owner.lastName,
+		});
 
-test('PUT /workflows/:id/share should override sharing', async () => {
-	const owner = await testDb.createUser({ globalRole: globalOwnerRole });
-	const member = await testDb.createUser({ globalRole: globalMemberRole });
-	const anotherMember = await testDb.createUser({ globalRole: globalMemberRole });
-	const workflow = await createWorkflow({}, owner);
+		expect(response.body.data.sharedWith).toHaveLength(1);
+		expect(response.body.data.sharedWith[0]).toMatchObject({
+			id: member.id,
+			email: member.email,
+			firstName: member.firstName,
+			lastName: member.lastName,
+		});
+	});
 
-	const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+	test('GET should return all sharees', async () => {
+		const owner = await testDb.createUser({ globalRole: globalOwnerRole });
+		const member1 = await testDb.createUser({ globalRole: globalMemberRole });
+		const member2 = await testDb.createUser({ globalRole: globalMemberRole });
+		const workflow = await createWorkflow({}, owner);
+		const authOwnerAgent = utils.createAgent(app, { auth: true, user: owner });
+		await testDb.shareWorkflowWithUsers(workflow, [member1, member2]);
 
-	const response = await authOwnerAgent
-		.put(`/workflows/${workflow.id}/share`)
-		.send({ shareWithIds: [member.id, anotherMember.id] });
+		const response = await authOwnerAgent.get(`/workflows/${workflow.id}`);
 
-	expect(response.statusCode).toBe(200);
+		expect(response.statusCode).toBe(200);
+		expect(response.body.data.ownedBy).toMatchObject({
+			id: owner.id,
+			email: owner.email,
+			firstName: owner.firstName,
+			lastName: owner.lastName,
+		});
 
-	const sharedWorkflows = await testDb.getWorkflowSharing(workflow);
-	expect(sharedWorkflows.length).toBe(3);
-
-	const secondResponse = await authOwnerAgent
-		.put(`/workflows/${workflow.id}/share`)
-		.send({ shareWithIds: [member.id] });
-	expect(secondResponse.statusCode).toBe(200);
-
-	const secondSharedWorkflows = await testDb.getWorkflowSharing(workflow);
-	expect(secondSharedWorkflows.length).toBe(2);
+		expect(response.body.data.sharedWith).toHaveLength(2);
+	});
 });
